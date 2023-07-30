@@ -1,11 +1,11 @@
 package = "lua-plum"
 version = "dev-1"
 source = {
-   url = "https://github.com/WonderfulToolchain/lua-plum"
+   url = "https://github.com/asiekierka/lua-plum"
 }
 description = {
    summary = "Lua bindings for the libplum image handling library.",
-   homepage = "https://github.com/WonderfulToolchain/lua-plum",
+   homepage = "https://github.com/asiekierka/lua-plum",
    license = "Unlicense"
 }
 build = {
