@@ -8,6 +8,9 @@ description = {
    homepage = "https://github.com/asiekierka/lua-plum",
    license = "Unlicense"
 }
+dependencies = {
+   "lua >= 5.3, <= 5.4"
+}
 build = {
    type = "builtin",
    modules = {
