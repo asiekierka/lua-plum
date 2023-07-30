@@ -4,16 +4,20 @@ Lua bindings for the [libplum](https://github.com/aaaaaa123456789/libplum/) imag
 
 Licensed under the Unlicense, same as the parent library.
 
+More complete documentation is provided in the parent project; relevant sections are linked below.
+
 ## Constants
+
+[C library documentation](https://github.com/aaaaaa123456789/libplum/blob/master/docs/constants.md)
 
 | Name | Description |
 | ---- | ----------- |
-| plum.COLOR_32 | |
-| plum.COLOR_16 | |
-| plum.COLOR_64 | |
-| plum.COLOR_32X | |
-| plum.COLOR_MASK | |
-| plum.ALPHA_INVERT | |
+| plum.COLOR_32 | ARGB8888 color type. |
+| plum.COLOR_16 | ARGB1555 color type. |
+| plum.COLOR_64 | ARGB16161616 color type. |
+| plum.COLOR_32X | ARGB2101010 color type. |
+| plum.COLOR_MASK | Color bitmask for color type flags. |
+| plum.ALPHA_INVERT | Flag for color types which un-invert the alpha (by default, the alpha is inverted). |
 | plum.PALETTE_LOAD | |
 | plum.PALETTE_GENERATE | |
 | plum.PALETTE_FORCE | |
@@ -46,6 +50,11 @@ Licensed under the Unlicense, same as the parent library.
 | plum.DISPOSAL_BACKGROUND_REPLACE | |
 | plum.DISPOSAL_PREVIOUS_REPLACE | |
 | plum.NUM_DISPOSAL_METHODS | |
+
+### Error codes
+
+| Name | Description |
+| ---- | ----------- |
 | plum.OK | |
 | plum.ERR_INVALID_ARGUMENTS | |
 | plum.ERR_INVALID_FILE_FORMAT | |
@@ -78,6 +87,8 @@ Licensed under the Unlicense, same as the parent library.
 
 ## Methods
 
+[C library documentation](https://github.com/aaaaaa123456789/libplum/blob/master/docs/functions.md)
+
 | Name | Description |
 | ---- | ----------- |
 | libplum.new(width, height, frames, flags...) | |
@@ -87,23 +98,23 @@ Licensed under the Unlicense, same as the parent library.
 | libplum.file_format_name(type) | Show the file format for a given image type. |
 | libplum.version() | Parent library version. |
 | libplum.check_valid_image_size(width, height[, frames]) | |
-| image:get(x, y, [z, [width, height]]) | |
-| image:set(x, y, [z, [width, height]], table or pixel) | |
-| image:copy() | |
-| image:store() | |
-| image:storefile(filename) | |
-| image:validate() | |
-| image:rotate(count, flip) | |
-| image:convert_colors(target) | |
-| image:remove_alpha() | |
+| image:get(x, y, [z, [width, height]]) | Get a pixel or group of pixels, as color values. |
+| image:set(x, y, [z, [width, height]], table or pixel) | Set a pixel or group of pixels, as color values. |
+| image:copy() | Create copy of image. |
+| image:store() | Store image to buffer; returns string of type specified in `image.type`. |
+| image:storefile(filename) | Store image to filename. |
+| image:validate() | Validate image. |
+| image:rotate(count, flip) | Rotate image by `count` clockwise rotations, optionally flipping vertically - [see example](https://github.com/aaaaaa123456789/libplum/blob/master/docs/rotation.md). |
+| image:convert_colors(target) | Convert to a target color space. |
+| image:remove_alpha() | Remove transparency data from image.  |
 | image:sort_palette([sorting_function, ] flags...) | |
-| image:reduce_palette() | |
-| image:highest_used_palette_index() | |
-| image:to_indexed() | |
-| image:to_rgba() | |
-| color:unpack(value) | |
-| color:pack({r, g, b, a}) | |
-| color:convert(value, target) | |
+| image:reduce_palette() | Remove duplicate palette entries. |
+| image:highest_used_palette_index() | Return the highest palette index actually in use. |
+| image:to_indexed() | Convert an RGBA image to an indexed image. |
+| image:to_rgba() | Convert an indexed image to an RGBA image. |
+| color:unpack(value[, normalized]) | Unpack a color value into a four-value table; `normalized` returns 0..1 floats |
+| color:pack({r, g, b, a}[, normalized]) | Pack a four-value table into a color value. |
+| color:convert(value, target) | Convert a color value from one color space to another. |
 
 ## TODO
 
