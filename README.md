@@ -67,6 +67,8 @@ Licensed under the Unlicense, same as the parent library.
 | image.type | |
 | image.width | |
 | image.height | |
+| image.color | |
+| image.alpha_invert | |
 | image.frames | |
 | image.palette | |
 | color.id | |
@@ -78,6 +80,7 @@ Licensed under the Unlicense, same as the parent library.
 
 | Name | Description |
 | ---- | ----------- |
+| libplum.new(width, height, frames, flags...) | |
 | libplum.load(buffer, flags...) | Load image file from string. |
 | libplum.loadfile(filename, flags...) | Load image file from filename. |
 | libplum.error_text(code) | Show the error string for a given return code. |
@@ -104,6 +107,5 @@ Licensed under the Unlicense, same as the parent library.
 
 ## TODO
 
-* Support creating new images.
 * Support reading metadata (looping information, etc).
 * Support writing metadata.

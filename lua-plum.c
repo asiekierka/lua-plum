@@ -219,6 +219,18 @@ static int libplumL_color_array_index(lua_State *L) {
     return 1;
 }
 
+static int libplumL_color_array_eq(lua_State *L) {
+    void *ap = luaL_testudata(L, 1, LUAPLUM_COLOR_ARRAY_MT);
+    void *bp = luaL_testudata(L, 2, LUAPLUM_COLOR_ARRAY_MT);
+    lua_pushboolean(L, ap != NULL && bp != NULL && *((uint64_t **) ap) == *((uint64_t **) bp));
+    return 1;
+}
+
+static int libplumL_color_array_len(lua_State *L) {
+    lua_pushinteger(L, 4);
+    return 1;
+}
+
 // libplum wrappers
 
 static unsigned __libplumL_or_flags(lua_State *L, int n) {
@@ -245,6 +257,7 @@ static int __libplumL_return_code(lua_State *L, int error) {
 }
 
 static uint64_t __libplumL_read_pixel(void *data, unsigned color_format, size_t position) {
+    color_format &= PLUM_COLOR_MASK;
     if (color_format == PLUM_COLOR_16) {
         return ((uint16_t *) data)[position];
     } else if (color_format == PLUM_COLOR_64) {
@@ -259,6 +272,7 @@ static uint64_t __libplumL_read_pixel(void *data, unsigned color_format, size_t 
 }
 
 static void __libplumL_write_pixel(void *data, unsigned color_format, size_t position, uint64_t value) {
+    color_format &= PLUM_COLOR_MASK;
     if (color_format == PLUM_COLOR_16) {
         ((uint16_t *) data)[position] = value;
     } else if (color_format == PLUM_COLOR_64) {
@@ -270,21 +284,13 @@ static void __libplumL_write_pixel(void *data, unsigned color_format, size_t pos
     }
 }
 
-static struct plum_image *libplumL_checkimage(lua_State *L, int i) {
-    void *ptr = luaL_checkudata(L, i, LIBPLUM_IMAGE_MT);
+static struct plum_image *libplumL_checkimage(lua_State *L, int i, const char *mt) {
+    void *ptr = luaL_checkudata(L, i, mt);
     luaL_argcheck(L, ptr != NULL, i, "`image' expected");
     return *((struct plum_image **) ptr);
 }
 
-static struct plum_image *libplumL_checkimagepalette(lua_State *L, int i) {
-    void *ptr = luaL_checkudata(L, i, LUAPLUM_IMAGE_PALETTE_MT);
-    luaL_argcheck(L, ptr != NULL, i, "`image palette' expected");
-    return *((struct plum_image **) ptr);
-}
-
-static void libplumL_pushimage(lua_State *L, struct plum_image *image) {
-    struct plum_image ** image_container = lua_newuserdata(L, sizeof(struct plum_image *));
-    *image_container = image;
+static void __libplumL_image_inc_refcount(lua_State *L, struct plum_image *image) {
     if (image->userdata == NULL) {
         image->userdata = malloc(sizeof(uint64_t));
         if (!image->userdata) {
@@ -293,12 +299,9 @@ static void libplumL_pushimage(lua_State *L, struct plum_image *image) {
         *((uint64_t*) image->userdata) = 0;
     }
     (*((uint64_t *) image->userdata))++;
-
-    luaL_getmetatable(L, LIBPLUM_IMAGE_MT);
-    lua_setmetatable(L, -2);
 }
 
-static int __libplumL_image_destroy(struct plum_image *image) {
+static void __libplumL_image_dec_refcount(lua_State *L, struct plum_image *image) {
     uint64_t *counter = (uint64_t*) image->userdata;
     if (*counter == 1) {
       plum_destroy_image(image);
@@ -308,25 +311,75 @@ static int __libplumL_image_destroy(struct plum_image *image) {
     }
 }
 
-static int libplumL_image_destroy(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
-    __libplumL_image_destroy(image);
+static int __libplumL_image_destroy(lua_State *L, const char *mt) {
+    struct plum_image *image = libplumL_checkimage(L, 1, mt);
+    __libplumL_image_dec_refcount(L, image);
     lua_pushboolean(L, true);
     return 1;
 }
 
+static void libplumL_pushimage(lua_State *L, struct plum_image *image, const char *mt) {
+    struct plum_image ** image_container = lua_newuserdata(L, sizeof(struct plum_image *));
+    *image_container = image;
+    __libplumL_image_inc_refcount(L, image);
+
+    luaL_getmetatable(L, mt);
+    lua_setmetatable(L, -2);
+}
+
+static int libplumL_image_destroy(lua_State *L) {
+    return __libplumL_image_destroy(L, LIBPLUM_IMAGE_MT);
+}
+
 static int libplumL_image_palette_destroy(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
-    __libplumL_image_destroy(image);
-    lua_pushboolean(L, true);
+    return __libplumL_image_destroy(L, LUAPLUM_IMAGE_PALETTE_MT);
+}
+
+static int libplumL_image_new(lua_State *L) {
+    struct plum_image *image = plum_new_image();
+    if (!image) {
+        luaL_error(L, "out of memory");
+    }
+    unsigned flags = __libplumL_or_flags(L, 4);
+    image->width = luaL_checkinteger(L, 1);
+    image->height = luaL_checkinteger(L, 2);
+    image->frames = luaL_checkinteger(L, 3);
+    image->color_format = flags & (PLUM_COLOR_MASK | PLUM_ALPHA_INVERT);
+    image->type = PLUM_IMAGE_NONE;
+    size_t size = image->width * image->height * image->frames;
+    if (flags & PLUM_PALETTE_MASK) {
+        // create indexed image
+        image->data = plum_malloc(image, size);
+        image->palette = plum_malloc(image, plum_color_buffer_size(1, image->color_format));
+        if (!image->data || !image->palette) {
+            plum_destroy_image(image);
+            luaL_error(L, "out of memory");
+        }
+        image->max_palette_index = 0;
+
+        memset(image->data, 0, size);
+        memset(image->palette, 0, plum_color_buffer_size(1, image->color_format));
+    } else {
+        // create RGBA image
+        image->data = plum_malloc(image, plum_color_buffer_size(size, image->color_format));
+        if (!image->data) {
+            plum_destroy_image(image);
+            luaL_error(L, "out of memory");
+        }
+        image->palette = NULL;
+
+        memset(image->data, 0, plum_color_buffer_size(size, image->color_format));
+    }
+    image->userdata = NULL;
+    libplumL_pushimage(L, image, LIBPLUM_IMAGE_MT);
     return 1;
 }
 
 static int libplumL_image_copy(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     struct plum_image *new_image = plum_copy_image(image);
     new_image->userdata = NULL;
-    libplumL_pushimage(L, new_image);
+    libplumL_pushimage(L, new_image, LIBPLUM_IMAGE_MT);
     return 1;
 }
 
@@ -341,7 +394,7 @@ static int __libplumL_image_load(lua_State *L, size_t mode) {
         lua_pushinteger(L, error);
         return 2;
     } else {
-        libplumL_pushimage(L, image);
+        libplumL_pushimage(L, image, LIBPLUM_IMAGE_MT);
         return 1;
     }
 }
@@ -355,7 +408,7 @@ static int libplumL_image_loadfile(lua_State *L) {
 }
 
 static int __libplumL_image_store(lua_State *L, size_t mode) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     struct plum_buffer buffer = { 0, NULL };
     void *source;
     if (mode == PLUM_MODE_FILENAME) {
@@ -387,7 +440,7 @@ static int libplumL_image_storefile(lua_State *L) {
 }
 
 static int libplumL_image_validate(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     lua_pushinteger(L, plum_validate_image(image));
     return 1;
 }
@@ -420,14 +473,14 @@ static int libplumL_check_valid_image_size(lua_State *L) {
 }
 
 static int libplumL_image_remove_alpha(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     plum_remove_alpha(image);
     return 0;
 }
 
 static int libplumL_image_convert_colors(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
-    unsigned to = libplumL_checkcolorid(L, 2);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
+    unsigned to = __libplumL_or_flags(L, 2);
     if (image->palette) {
         // paletted image
         size_t size = image->max_palette_index + 1;
@@ -451,7 +504,7 @@ static int libplumL_image_convert_colors(lua_State *L) {
 
 
 static int libplumL_image_rotate(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     int count = luaL_optinteger(L, 2, 1);
     int flip = luaL_optinteger(L, 3, 0);
     plum_rotate_image(image, count, flip);
@@ -468,7 +521,7 @@ static uint64_t libplumL_image_sort_palette_custom(void *userdata, uint64_t valu
 }
 
 static int libplumL_image_sort_palette(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     unsigned flags;
     int error;
     if (lua_isfunction(L, 2)) {
@@ -482,18 +535,18 @@ static int libplumL_image_sort_palette(lua_State *L) {
 }
 
 static int libplumL_image_reduce_palette(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     return __libplumL_return_code(L, plum_reduce_palette(image));
 }
 
 static int libplumL_image_get_highest_palette_index(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     lua_pushinteger(L, plum_get_highest_palette_index(image));
     return 1;
 }
 
 static int libplumL_image_to_indexed(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     size_t size = image->width * image->height * image->frames;
     unsigned flags = lua_gettop(L) >= 2 ? __libplumL_or_flags(L, 2) : image->color_format;
 
@@ -524,7 +577,7 @@ static int libplumL_image_to_indexed(lua_State *L) {
 }
 
 static int libplumL_image_to_rgba(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     size_t size = image->width * image->height * image->frames;
     unsigned flags = lua_gettop(L) >= 2 ? __libplumL_or_flags(L, 2) : image->color_format;
 
@@ -546,12 +599,12 @@ static int libplumL_image_to_rgba(lua_State *L) {
 }
 
 static int libplumL_image_get_index(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     lua_Integer x1 = luaL_checkinteger(L, 2);
     lua_Integer y1 = luaL_checkinteger(L, 3);
     lua_Integer z = luaL_optinteger(L, 4, 0);
-    lua_Integer width = luaL_optinteger(L, 5, 1);
-    lua_Integer height = luaL_optinteger(L, 6, 1);
+    lua_Integer width = lua_gettop(L) >= 5 ? luaL_checkinteger(L, 5) : 1;
+    lua_Integer height = lua_gettop(L) >= 5 ? luaL_checkinteger(L, 6) : 1;
     if (width <= 0 || height <= 0) {
         return 0;
     }
@@ -577,12 +630,12 @@ static int libplumL_image_get_index(lua_State *L) {
 }
 
 static int libplumL_image_set_index(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     lua_Integer x1 = luaL_checkinteger(L, 2);
     lua_Integer y1 = luaL_checkinteger(L, 3);
     lua_Integer z = lua_gettop(L) > 4 ? luaL_checkinteger(L, 4) : 0;
     lua_Integer width = lua_gettop(L) > 5 ? luaL_checkinteger(L, 5) : 1;
-    lua_Integer height = lua_gettop(L) > 6 ? luaL_checkinteger(L, 6) : 1;
+    lua_Integer height = lua_gettop(L) > 5 ? luaL_checkinteger(L, 6) : 1;
     if (width <= 0 || height <= 0) {
         return 0;
     }
@@ -641,6 +694,7 @@ static const luaL_Reg plum_image_funcs[] = {
 
 static const luaL_Reg plum_funcs[] = {
 // struct plum_image * plum_new_image(void);
+    { "new", libplumL_image_new },
     { "load", libplumL_image_load },
     { "loadfile", libplumL_image_loadfile },
 // struct plum_image * plum_load_image_limited(const void * restrict buffer, size_t size_mode, unsigned flags, size_t limit, unsigned * restrict error);
@@ -653,13 +707,9 @@ static const luaL_Reg plum_funcs[] = {
 };
 
 static int libplumL_image_index(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     const char *key = luaL_checklstring(L, 2, NULL);
 
-    if (!strcmp(key, "type")) {
-        lua_pushinteger(L, image->type);
-        return 1;
-    }
     if (!strcmp(key, "width")) {
         lua_pushinteger(L, image->width);
         return 1;
@@ -672,14 +722,25 @@ static int libplumL_image_index(lua_State *L) {
         lua_pushinteger(L, image->frames);
         return 1;
     }
+    if (!strcmp(key, "type")) {
+        lua_pushinteger(L, image->type);
+        return 1;
+    }
+    if (!strcmp(key, "color")) {
+        const struct luaplum_color ** color_container = lua_newuserdata(L, sizeof(const struct plum_color *));
+        *color_container = &luaplum_colors[image->color_format & PLUM_COLOR_MASK];
+
+        luaL_getmetatable(L, LUAPLUM_COLOR_MT);
+        lua_setmetatable(L, -2);
+        return 1;
+    }
+    if (!strcmp(key, "alpha_invert")) {
+        lua_pushboolean(L, (image->color_format & PLUM_ALPHA_INVERT) ? true : false);
+        return 1;
+    }
     if (!strcmp(key, "palette")) {
         if (image->palette != NULL) {
-            struct plum_image ** image_container = lua_newuserdata(L, sizeof(struct plum_image *));
-            *image_container = image;
-            (*((uint64_t *) image->userdata))++;
-
-            luaL_getmetatable(L, LUAPLUM_IMAGE_PALETTE_MT);
-            lua_setmetatable(L, -2);
+            libplumL_pushimage(L, image, LUAPLUM_IMAGE_PALETTE_MT);
         } else {
             lua_pushnil(L);
         }
@@ -690,7 +751,7 @@ static int libplumL_image_index(lua_State *L) {
 }
 
 static int libplumL_image_newindex(lua_State *L) {
-    struct plum_image *image = libplumL_checkimage(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LIBPLUM_IMAGE_MT);
     const char *key = luaL_checklstring(L, 2, NULL);
 
     if (!strcmp(key, "type")) {
@@ -705,8 +766,15 @@ static int libplumL_image_newindex(lua_State *L) {
     return 0;
 }
 
+static int libplumL_image_palette_len(lua_State *L) {
+    struct plum_image *image = libplumL_checkimage(L, 1, LUAPLUM_IMAGE_PALETTE_MT);
+
+    lua_pushinteger(L, image->palette != NULL ? (lua_Integer) image->max_palette_index + 1 : 0);
+    return 1;
+}
+
 static int libplumL_image_palette_index(lua_State *L) {
-    struct plum_image *image = libplumL_checkimagepalette(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LUAPLUM_IMAGE_PALETTE_MT);
     lua_Integer key = luaL_checknumber(L, 2);
 
     if (image->palette != NULL && key >= 0 && key < image->max_palette_index) {
@@ -718,7 +786,7 @@ static int libplumL_image_palette_index(lua_State *L) {
 }
 
 static int libplumL_image_palette_newindex(lua_State *L) {
-    struct plum_image *image = libplumL_checkimagepalette(L, 1);
+    struct plum_image *image = libplumL_checkimage(L, 1, LUAPLUM_IMAGE_PALETTE_MT);
     lua_Integer key = luaL_checknumber(L, 2);
     uint64_t value = luaL_checkinteger(L, 3);
 
@@ -807,6 +875,14 @@ int luaopen_libplum(lua_State* L) {
     lua_pushcfunction(L, libplumL_color_array_index);
     lua_settable(L, -3);
 
+    lua_pushliteral(L, "__eq");
+    lua_pushcfunction(L, libplumL_color_array_eq);
+    lua_settable(L, -3);
+
+    lua_pushliteral(L, "__len");
+    lua_pushcfunction(L, libplumL_color_array_len);
+    lua_settable(L, -3);
+
     lua_pop(L, 1);
 
     luaL_newmetatable(L, LUAPLUM_COLOR_MT);
@@ -825,6 +901,10 @@ int luaopen_libplum(lua_State* L) {
 
     lua_pushliteral(L, "__newindex");
     lua_pushcfunction(L, libplumL_image_palette_newindex);
+    lua_settable(L, -3);
+
+    lua_pushliteral(L, "__len");
+    lua_pushcfunction(L, libplumL_image_palette_len);
     lua_settable(L, -3);
 
     lua_pushliteral(L, "__gc");
