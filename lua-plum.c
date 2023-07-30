@@ -11,6 +11,7 @@
 #define LUAPLUM_COLOR_MT "luaplum_color"
 #define LUAPLUM_COLOR_ARRAY_MT "luaplum_color_array"
 #define LIBPLUM_IMAGE_MT "plum_image"
+#define LUAPLUM_IMAGE_PALETTE_MT "luaplum_image_palette"
 
 static int __libplumL_index_funcs_fallback(lua_State *L, const char *key, const luaL_Reg *func) {
     while (func->name != NULL) {
@@ -203,16 +204,16 @@ static int libplumL_color_array_index(lua_State *L) {
     void *ptr = luaL_checkudata(L, 1, LUAPLUM_COLOR_ARRAY_MT);
     luaL_argcheck(L, ptr != NULL, 1, "`color array' expected");
     uint64_t *table = *((uint64_t **) ptr);
-    if (lua_isstring(L, 2)) {
+    if (lua_isnumber(L, 2)) {
+        lua_Integer key = lua_tonumber(L, 2);
+        if (key >= 1 && key <= 4) lua_pushinteger(L, table[key - 1]);
+        else lua_pushnil(L);
+    } else {
         const char *key = lua_tostring(L, 2);
         if (!strcmp(key, "red") || !strcmp(key, "r")) lua_pushinteger(L, table[0]);
         else if (!strcmp(key, "green") || !strcmp(key, "g")) lua_pushinteger(L, table[1]);
         else if (!strcmp(key, "blue") || !strcmp(key, "b")) lua_pushinteger(L, table[2]);
         else if (!strcmp(key, "alpha") || !strcmp(key, "a")) lua_pushinteger(L, table[3]);
-        else lua_pushnil(L);
-    } else {
-        lua_Integer key = luaL_checkinteger(L, 2);
-        if (key >= 1 && key <= 4) lua_pushinteger(L, table[key - 1]);
         else lua_pushnil(L);
     }
     return 1;
@@ -243,30 +244,89 @@ static int __libplumL_return_code(lua_State *L, int error) {
     }
 }
 
+static uint64_t __libplumL_read_pixel(void *data, unsigned color_format, size_t position) {
+    if (color_format == PLUM_COLOR_16) {
+        return ((uint16_t *) data)[position];
+    } else if (color_format == PLUM_COLOR_64) {
+        return ((uint64_t *) data)[position];
+    } else if (color_format == PLUM_COLOR_32) {
+        return ((uint32_t *) data)[position];
+    } else if (color_format == PLUM_COLOR_32X) {
+        return ((uint32_t *) data)[position];
+    } else {
+        return 0;
+    }
+}
+
+static void __libplumL_write_pixel(void *data, unsigned color_format, size_t position, uint64_t value) {
+    if (color_format == PLUM_COLOR_16) {
+        ((uint16_t *) data)[position] = value;
+    } else if (color_format == PLUM_COLOR_64) {
+        ((uint16_t *) data)[position] = value;
+    } else if (color_format == PLUM_COLOR_32) {
+        ((uint16_t *) data)[position] = value;
+    } else if (color_format == PLUM_COLOR_32X) {
+        ((uint16_t *) data)[position] = value;
+    }
+}
+
 static struct plum_image *libplumL_checkimage(lua_State *L, int i) {
     void *ptr = luaL_checkudata(L, i, LIBPLUM_IMAGE_MT);
     luaL_argcheck(L, ptr != NULL, i, "`image' expected");
     return *((struct plum_image **) ptr);
 }
 
+static struct plum_image *libplumL_checkimagepalette(lua_State *L, int i) {
+    void *ptr = luaL_checkudata(L, i, LUAPLUM_IMAGE_PALETTE_MT);
+    luaL_argcheck(L, ptr != NULL, i, "`image palette' expected");
+    return *((struct plum_image **) ptr);
+}
+
 static void libplumL_pushimage(lua_State *L, struct plum_image *image) {
     struct plum_image ** image_container = lua_newuserdata(L, sizeof(struct plum_image *));
     *image_container = image;
+    if (image->userdata == NULL) {
+        image->userdata = malloc(sizeof(uint64_t));
+        if (!image->userdata) {
+            luaL_error(L, "out of memory");
+        }
+        *((uint64_t*) image->userdata) = 0;
+    }
+    (*((uint64_t *) image->userdata))++;
 
     luaL_getmetatable(L, LIBPLUM_IMAGE_MT);
     lua_setmetatable(L, -2);
 }
 
+static int __libplumL_image_destroy(struct plum_image *image) {
+    uint64_t *counter = (uint64_t*) image->userdata;
+    if (*counter == 1) {
+      plum_destroy_image(image);
+      free(image->userdata);
+    } else {
+        (*counter)--;
+    }
+}
+
 static int libplumL_image_destroy(lua_State *L) {
     struct plum_image *image = libplumL_checkimage(L, 1);
-    plum_destroy_image(image);
+    __libplumL_image_destroy(image);
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+static int libplumL_image_palette_destroy(lua_State *L) {
+    struct plum_image *image = libplumL_checkimage(L, 1);
+    __libplumL_image_destroy(image);
     lua_pushboolean(L, true);
     return 1;
 }
 
 static int libplumL_image_copy(lua_State *L) {
     struct plum_image *image = libplumL_checkimage(L, 1);
-    libplumL_pushimage(L, image);
+    struct plum_image *new_image = plum_copy_image(image);
+    new_image->userdata = NULL;
+    libplumL_pushimage(L, new_image);
     return 1;
 }
 
@@ -287,7 +347,7 @@ static int __libplumL_image_load(lua_State *L, size_t mode) {
 }
 
 static int libplumL_image_load(lua_State *L) {
-    return __libplumL_image_load(L, PLUM_MODE_BUFFER);
+    return __libplumL_image_load(L, 0);
 }
 
 static int libplumL_image_loadfile(lua_State *L) {
@@ -438,7 +498,7 @@ static int libplumL_image_to_indexed(lua_State *L) {
     unsigned flags = lua_gettop(L) >= 2 ? __libplumL_or_flags(L, 2) : image->color_format;
 
     if (image->palette) {
-        lua_pushboolean(L, false);
+        lua_pushinteger(L, 0);
         return 1;
     }
 
@@ -451,12 +511,16 @@ static int libplumL_image_to_indexed(lua_State *L) {
     }
 
     int error = plum_convert_colors_to_indexes(new_pixels, image->data, new_palette, size, flags);
-    if (!error) {
+    if (error >= 0) {
         plum_free(image, image->data);
         image->data = new_pixels;
+        image->max_palette_index = error;
         image->palette = new_palette;
+        lua_pushinteger(L, error);
+        return 1;
+    } else {
+        return __libplumL_return_code(L, error);
     }
-    return __libplumL_return_code(L, error);
 }
 
 static int libplumL_image_to_rgba(lua_State *L) {
@@ -476,6 +540,7 @@ static int libplumL_image_to_rgba(lua_State *L) {
     plum_free(image, image->data);
     plum_free(image, image->palette);
     image->data = new_pixels;
+    image->max_palette_index = 0;
     image->palette = NULL;
     return __libplumL_return_code(L, 0);
 }
@@ -502,16 +567,8 @@ static int libplumL_image_get_index(lua_State *L) {
                 size_t position = ((z * image->height) + y * image->width) + x;
                 if (image->palette != NULL) {
                     lua_pushinteger(L, ((uint8_t *) image->data)[position]);
-                } else if (image->color_format == PLUM_COLOR_16) {
-                    lua_pushinteger(L, ((uint16_t *) image->data)[position]);
-                } else if (image->color_format == PLUM_COLOR_64) {
-                    lua_pushinteger(L, ((uint64_t *) image->data)[position]);
-                } else if (image->color_format == PLUM_COLOR_32) {
-                    lua_pushinteger(L, ((uint32_t *) image->data)[position]);
-                } else if (image->color_format == PLUM_COLOR_32X) {
-                    lua_pushinteger(L, ((uint32_t *) image->data)[position]);
                 } else {
-                    lua_pushnil(L);
+                    lua_pushinteger(L, __libplumL_read_pixel(image->data, image->color_format, position));
                 }
             }
         }
@@ -550,14 +607,8 @@ static int libplumL_image_set_index(lua_State *L) {
 
                 if (image->palette != NULL) {
                     ((uint8_t *) image->data)[position] = value;
-                } else if (image->color_format == PLUM_COLOR_16) {
-                    ((uint16_t *) image->data)[position] = value;
-                } else if (image->color_format == PLUM_COLOR_64) {
-                    ((uint64_t *) image->data)[position] = value;
-                } else if (image->color_format == PLUM_COLOR_32) {
-                    ((uint32_t *) image->data)[position] = value;
-                } else if (image->color_format == PLUM_COLOR_32X) {
-                    ((uint32_t *) image->data)[position] = value;
+                } else {
+                    __libplumL_write_pixel(image->data, image->color_format, position, value);
                 }
             }
         }
@@ -621,6 +672,19 @@ static int libplumL_image_index(lua_State *L) {
         lua_pushinteger(L, image->frames);
         return 1;
     }
+    if (!strcmp(key, "palette")) {
+        if (image->palette != NULL) {
+            struct plum_image ** image_container = lua_newuserdata(L, sizeof(struct plum_image *));
+            *image_container = image;
+            (*((uint64_t *) image->userdata))++;
+
+            luaL_getmetatable(L, LUAPLUM_IMAGE_PALETTE_MT);
+            lua_setmetatable(L, -2);
+        } else {
+            lua_pushnil(L);
+        }
+        return 1;
+    }
 
     return __libplumL_index_funcs_fallback(L, key, plum_image_funcs);
 }
@@ -631,6 +695,43 @@ static int libplumL_image_newindex(lua_State *L) {
 
     if (!strcmp(key, "type")) {
         image->type = luaL_checkinteger(L, 3);
+        return 0;
+    }
+    if (!strcmp(key, "palette")) {
+        luaL_error(L, "unsupported assignment");
+        return 0;
+    }
+
+    return 0;
+}
+
+static int libplumL_image_palette_index(lua_State *L) {
+    struct plum_image *image = libplumL_checkimagepalette(L, 1);
+    lua_Integer key = luaL_checknumber(L, 2);
+
+    if (image->palette != NULL && key >= 0 && key < image->max_palette_index) {
+        lua_pushinteger(L, __libplumL_read_pixel(image->palette, image->color_format, key));
+    } else {
+        lua_pushnil(L);
+    }
+    return 1;
+}
+
+static int libplumL_image_palette_newindex(lua_State *L) {
+    struct plum_image *image = libplumL_checkimagepalette(L, 1);
+    lua_Integer key = luaL_checknumber(L, 2);
+    uint64_t value = luaL_checkinteger(L, 3);
+
+    if (image->palette != NULL && key >= 0 && key < 256) {
+        if (key >= image->max_palette_index) {
+            void *new_palette = plum_realloc(image, image->palette, plum_color_buffer_size(key + 1, image->color_format));
+            if (!new_palette) {
+                luaL_error(L, "out of memory");
+            }
+            image->palette = new_palette;
+            image->max_palette_index = key + 1;
+        }
+        __libplumL_write_pixel(image->palette, image->color_format, key, value);
     }
 
     return 0;
@@ -714,6 +815,22 @@ int luaopen_libplum(lua_State* L) {
     lua_pushcfunction(L, libplumL_color_index);
     lua_settable(L, -3);
 
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, LUAPLUM_IMAGE_PALETTE_MT);
+
+    lua_pushliteral(L, "__index");
+    lua_pushcfunction(L, libplumL_image_palette_index);
+    lua_settable(L, -3);
+
+    lua_pushliteral(L, "__newindex");
+    lua_pushcfunction(L, libplumL_image_palette_newindex);
+    lua_settable(L, -3);
+
+    lua_pushliteral(L, "__gc");
+    lua_pushcfunction(L, libplumL_image_palette_destroy);
+    lua_settable(L, -3);
+    
     lua_pop(L, 1);
 
     for (int i = 0; i < LUAPLUM_COLOR_MT_COUNT; i++) {
